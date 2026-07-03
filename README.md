@@ -48,7 +48,7 @@ sparse_depth/                          the package (front-end + geometry + I/O)
   interactive_plane_homography_viewer_kitti.py   ground/plane subsystem
 sparse_depth_eval_kitti.py             headless evaluator (CSV metrics)
 run_ablation.py                        factorial ablation runner
-configs/sift_lk.toml                   unified config (paths + baseline params)
+configs/default.toml                   unified config (paths + baseline params)
 ```
 
 ## Installation
@@ -62,13 +62,12 @@ pip install torch
 ```
 
 XFeat is loaded on first use via `torch.hub` (`verlab/accelerated_features`) and
-is **forced onto the CPU** (`CUDA_VISIBLE_DEVICES=-1` is set inside the wrapper),
-so it never contends for a busy GPU.
+runs on CPU by default, so no GPU is required.
 
 ## Data setup
 
 KITTI data is **not** included (it is gitignored). Point the config at your local
-copy. `configs/sift_lk.toml` holds the shared paths and one `[sequenceNN]` block
+copy. `configs/default.toml` holds the shared paths and one `[sequenceNN]` block
 per sequence — uncomment the one you want:
 
 ```toml
@@ -88,15 +87,8 @@ You need the KITTI odometry **grayscale images**, **ground-truth poses**, and
 
 ## Usage
 
-All commands read `configs/sift_lk.toml` for data paths and baseline parameters;
-the CLI flags below just override individual axes. Everything runs CPU-only.
-
-First, hide the GPU for the session (keeps XFeat/torch off any busy GPU):
-
-```powershell
-$env:CUDA_VISIBLE_DEVICES = "-1"     # PowerShell
-# export CUDA_VISIBLE_DEVICES=-1     # bash
-```
+All commands read `configs/default.toml` for data paths and baseline parameters;
+the CLI flags below just override individual axes.
 
 ### Headless evaluation
 
@@ -105,33 +97,33 @@ Writes `summary_metrics.csv`, `per_frame_metrics.csv`, `config.json`, and (unles
 
 ```powershell
 # 1. Baseline — hybrid SIFT + LK, windowed multiview
-python sparse_depth_eval_kitti.py --config configs/sift_lk.toml `
+python sparse_depth_eval_kitti.py --config configs/default.toml `
   --detector sift --descriptor sift --lk-on `
   --triangulation-method windowed_multiview_dlt `
   --start 0 --num-frames 50 --output-root outputs/eval_sift_lk_windowed
 
 # 2. Accuracy champion — SIFT, LK off, pure descriptor matching, tight ratio
-python sparse_depth_eval_kitti.py --config configs/sift_lk.toml `
+python sparse_depth_eval_kitti.py --config configs/default.toml `
   --detector sift --descriptor sift --no-lk-on `
   --matcher radius_lowe --ratio 0.70 --search-radius 30 `
   --triangulation-method best_pair_dlt `
   --start 0 --num-frames 50 --output-root outputs/eval_sift_lkoff_ratio70
 
 # 3. Shi-Tomasi + LK — tracking-friendly detector
-python sparse_depth_eval_kitti.py --config configs/sift_lk.toml `
+python sparse_depth_eval_kitti.py --config configs/default.toml `
   --detector shi --descriptor sift --lk-on `
   --triangulation-method windowed_multiview_dlt `
   --start 0 --num-frames 50 --output-root outputs/eval_shi_lk
 
 # 4. XFeat end-to-end — learned detector + descriptor + its own MNN matcher
-python sparse_depth_eval_kitti.py --config configs/sift_lk.toml `
+python sparse_depth_eval_kitti.py --config configs/default.toml `
   --detector xfeat --descriptor xfeat --no-lk-on `
   --matcher xfeat_mnn --xfeat-mnn-min-cossim 0.82 --xfeat-top-k 4096 `
   --triangulation-method best_pair_dlt `
   --start 0 --num-frames 50 --output-root outputs/eval_xfeat_native_mnn
 
 # 5. Coverage-oriented — denser buckets
-python sparse_depth_eval_kitti.py --config configs/sift_lk.toml `
+python sparse_depth_eval_kitti.py --config configs/default.toml `
   --detector sift --descriptor sift --lk-on `
   --target-per-bucket 20 --triangulation-method windowed_multiview_dlt `
   --start 0 --num-frames 50 --output-root outputs/eval_sift_lk_dense
@@ -146,29 +138,29 @@ module so package imports resolve:
 
 ```powershell
 # 1. Baseline — hybrid SIFT + LK
-python -m sparse_depth.interactive_feature_manager_kitti --config configs/sift_lk.toml `
+python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
   --detector sift --descriptor sift --lk-on `
   --triangulation-method windowed_multiview_dlt --start 0
 
 # 2. SIFT, LK off, pure matching
-python -m sparse_depth.interactive_feature_manager_kitti --config configs/sift_lk.toml `
+python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
   --detector sift --descriptor sift --no-lk-on `
   --matcher radius_lowe --ratio 0.70 --search-radius 30 `
   --triangulation-method best_pair_dlt --start 0
 
 # 3. Shi-Tomasi + LK
-python -m sparse_depth.interactive_feature_manager_kitti --config configs/sift_lk.toml `
+python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
   --detector shi --descriptor sift --lk-on `
   --triangulation-method windowed_multiview_dlt --start 0
 
 # 4. XFeat end-to-end + MNN matcher
-python -m sparse_depth.interactive_feature_manager_kitti --config configs/sift_lk.toml `
+python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
   --detector xfeat --descriptor xfeat --no-lk-on `
   --matcher xfeat_mnn --xfeat-mnn-min-cossim 0.82 --xfeat-top-k 4096 `
   --triangulation-method best_pair_dlt --start 0
 
 # 5. Coverage-oriented — denser buckets
-python -m sparse_depth.interactive_feature_manager_kitti --config configs/sift_lk.toml `
+python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
   --detector sift --descriptor sift --lk-on `
   --target-per-bucket 20 --triangulation-method windowed_multiview_dlt --start 0
 ```

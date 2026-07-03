@@ -1,10 +1,10 @@
-# Unified SIFT+LK sparse-depth config.
+# Unified sparse-depth config (viewer + evaluator + ablations).
 #
 # Viewer:
-#   python -m sparse_depth.interactive_feature_manager_kitti --config configs/sift_lk.toml
+#   python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml
 #
 # Evaluator:
-#   python sparse_depth_eval_kitti.py --config configs/sift_lk.toml
+#   python sparse_depth_eval_kitti.py --config configs/default.toml
 #
 # Keep sequence/data paths together here. The viewer and evaluator both read this
 # file; viewer-only values live under [viewer], evaluator-only values live under

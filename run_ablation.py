@@ -13,8 +13,8 @@ Design notes
   independent knobs (density, ratio) are swept OFAT to keep the grid report-sized.
 - LK-off has no frame-to-frame carrier, so those runs force lk_sift_period=1
   (detect + match every frame) or all tracks would die.
-- Every run is forced CPU-only (CUDA_VISIBLE_DEVICES=-1) so a training GPU on the
-  same machine is never touched, even for the xfeat variants.
+- Every run is forced CPU-only (CUDA_VISIBLE_DEVICES=-1) so timings are
+  comparable across variants, including the xfeat ones.
 - Each run uses --minimal-output: only summary_metrics.csv, per_frame_metrics.csv,
   and config.json (no plots, no per-point diagnostics).
 
@@ -38,7 +38,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
 EVAL_SCRIPT = REPO / "sparse_depth_eval_kitti.py"
-DEFAULT_CONFIG = REPO / "configs" / "sift_lk.toml"
+DEFAULT_CONFIG = REPO / "configs" / "default.toml"
 
 # CONTROLLED baseline: every factor pinned explicitly and soft-SIFT OFF, so the
 # detector comparison is clean (soft is a sift_lk-only layer; leaving it on for
@@ -206,7 +206,7 @@ def main():
 
     args.out_root.mkdir(parents=True, exist_ok=True)
 
-    # Force CPU-only for every child process; the GPU may be training.
+    # Force CPU-only for every child process so timings stay comparable.
     child_env = dict(os.environ)
     child_env["CUDA_VISIBLE_DEVICES"] = "-1"
 
