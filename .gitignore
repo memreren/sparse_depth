@@ -1,0 +1,24 @@
+# large data & derived outputs (NOT code; re-downloaded / re-created per machine)
+data/
+outputs/
+cache/
+backups/
+ResultsU/
+
+# papers / PDFs (not redistributed here)
+papers/
+*.pdf
+
+# stray result images at repo root
+*.png
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
