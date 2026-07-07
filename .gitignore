@@ -25,3 +25,32 @@ Thumbs.db
 
 # claude code per-machine settings
 .claude/settings.local.json
+
+# --- experimental subsystems ---------------------------------------------------
+# Kept on the 'experimental' branch (full backup) and on local disk, but NOT part
+# of the delivered sparse-depth project on main. Restore any of these with:
+#   git checkout experimental -- <path>
+# non-delivered entry points
+/run_ablation.py
+/sparse_depth_eval_kitti.py
+/depth_filter_eval_kitti.py
+/ground_plane_eval_kitti.py
+/ground_plane_calibrate_kitti.py
+/tti_direct_eval_kitti.py
+# ground-plane subsystem
+/sparse_depth/ground_plane.py
+/sparse_depth/plane_homography.py
+/sparse_depth/plane_validation.py
+/sparse_depth/ground_calibration.py
+/sparse_depth/interactive_ground_plane_viewer_kitti.py
+/sparse_depth/interactive_plane_homography_viewer_kitti.py
+# inverse-depth filter subsystem
+/sparse_depth/depth_filter.py
+/sparse_depth/interactive_depth_filter_viewer_kitti.py
+# direct-TTI subsystem
+/sparse_depth/tti_direct.py
+# experimental configs
+/configs/_seqruns/
+/configs/ground_calib_seq04.json
+/configs/ground_plane_seq04.toml
+/configs/plane_homography_seq04.toml
