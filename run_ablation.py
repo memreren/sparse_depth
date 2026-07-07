@@ -62,7 +62,8 @@ DETECTORS = [("shi", ["--detector", "shi"]),
              ("xfeat", ["--detector", "xfeat"])]
 TRIANG = [("bestpair", "best_pair_dlt"),
           ("windowed", "windowed_multiview_dlt"),
-          ("hybrid", "hybrid_pair_multiview")]
+          ("hybrid", "hybrid_pair_multiview"),
+          ("ttc", "ttc_expansion")]
 # LK-off has no frame-to-frame carrier, so it MUST detect+match every frame
 # (period 1) or tracks die. LK-on keeps the baseline period 3.
 LKOFF = ["--no-lk-on", "--detection-period", "1"]

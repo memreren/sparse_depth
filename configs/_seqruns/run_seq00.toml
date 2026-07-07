@@ -19,59 +19,59 @@ camera = "00"
 # [sequence00]
 # ############## SEQUENCE 00 ########################
 # # Directory containing rectified grayscale images.
-# img_dir = "C:/Users/DELL/Documents/kittiVO/data/sequences/00/image_0"
+# img_dir = "data/sequences/00/image_0"
 # # KITTI odometry calibration file. P0 provides the monocular camera intrinsics.
-# calib = "C:/Users/DELL/Documents/kittiVO/data/sequences/00/calib.txt"
+# calib = "data/sequences/00/calib.txt"
 # # KITTI odometry poses. These are used for GT-pose triangulation/diagnostics.
-# poses = "C:/Users/DELL/Documents/kittiVO/data/data_odometry_poses/dataset/poses/00.txt"
+# poses = "data/data_odometry_poses/dataset/poses/00.txt"
 # # Number of digits in image filenames: odometry image_0 uses 6, raw image_00 uses 10.
 # image_digits = 6
 # # Directory containing KITTI velodyne .bin files; set null to disable LiDAR metrics.
-# velodyne_dir = "C:/Users/DELL/Documents/kittiVO/data/2011_10_03_drive_0027_sync/velodyne_points/data"
+# velodyne_dir = "data/2011_10_03_drive_0027_sync/velodyne_points/data"
 # # Raw KITTI velo-to-camera calibration file.
-# calib_velo_to_cam = "C:/Users/DELL/Documents/kittiVO/data/2011_10_03/calib_velo_to_cam.txt"
+# calib_velo_to_cam = "data/2011_10_03/calib_velo_to_cam.txt"
 # # Raw KITTI cam-to-cam calibration file for rectification/projection.
-# calib_cam_to_cam = "C:/Users/DELL/Documents/kittiVO/data/2011_10_03/calib_cam_to_cam.txt"
+# calib_cam_to_cam = "data/2011_10_03/calib_cam_to_cam.txt"
 # # Number of digits in Velodyne filenames. Leave commented to use image_digits.
 # lidar_digits = 10
 
-[sequence04]
-############## SEQUENCE 04 ########################
-# Directory containing rectified grayscale image_00 PNG files.
-img_dir = "C:/Users/DELL/Documents/kittiVO/data/data_odometry_gray/dataset/sequences/04/image_0"
-# KITTI odometry calibration file; P0 is used for the monocular camera intrinsics.
-calib = "C:/Users/DELL/Documents/kittiVO/data/data_odometry_gray/dataset/sequences/04/calib.txt"
-# KITTI odometry pose file; used only for GT geometry/triangulation diagnostics.
-poses = "C:/Users/DELL/Documents/kittiVO/data/data_odometry_poses/dataset/poses/04.txt"
-# Number of digits in image filenames, e.g. 0000000000.png -> 10.
-image_digits = 6
-# Directory containing KITTI Velodyne .bin files. Leave commented to disable LiDAR.
-velodyne_dir = "C:/Users/DELL/Documents/kittiVO/data/2011_09_30_drive_0016_sync/velodyne_points/data"
-# Raw KITTI velo-to-camera calibration file. Needed for raw Velodyne projection.
-calib_velo_to_cam = "C:/Users/DELL/Documents/kittiVO/data/2011_09_30_calib/2011_09_30/calib_velo_to_cam.txt"
-# Raw KITTI cam-to-cam calibration file. Preferred when projecting raw Velodyne.
-calib_cam_to_cam = "C:/Users/DELL/Documents/kittiVO/data/2011_09_30_calib/2011_09_30/calib_cam_to_cam.txt"
-# Number of digits in Velodyne filenames. Leave commented to use image_digits.
-lidar_digits = 10
-
-# [sequence10]
-# ############## SEQUENCE 10 ########################
+# [sequence04]
+# ############## SEQUENCE 04 ########################
 # # Directory containing rectified grayscale image_00 PNG files.
-# img_dir = "C:/Users/DELL/Documents/kittiVO/data/data_odometry_gray/dataset/sequences/10/image_0"
+# img_dir = "data/data_odometry_gray/dataset/sequences/04/image_0"
 # # KITTI odometry calibration file; P0 is used for the monocular camera intrinsics.
-# calib = "C:/Users/DELL/Documents/kittiVO/data/data_odometry_gray/dataset/sequences/10/calib.txt"
+# calib = "data/data_odometry_gray/dataset/sequences/04/calib.txt"
 # # KITTI odometry pose file; used only for GT geometry/triangulation diagnostics.
-# poses = "C:/Users/DELL/Documents/kittiVO/data/data_odometry_poses/dataset/poses/10.txt"
+# poses = "data/data_odometry_poses/dataset/poses/04.txt"
 # # Number of digits in image filenames, e.g. 0000000000.png -> 10.
 # image_digits = 6
 # # Directory containing KITTI Velodyne .bin files. Leave commented to disable LiDAR.
-# velodyne_dir = "C:/Users/DELL/Documents/kittiVO/data/2011_09_30_drive_0034_sync/velodyne_points/data"
+# velodyne_dir = "data/2011_09_30_drive_0016_sync/velodyne_points/data"
 # # Raw KITTI velo-to-camera calibration file. Needed for raw Velodyne projection.
-# calib_velo_to_cam = "C:/Users/DELL/Documents/kittiVO/data/2011_09_30_calib/2011_09_30/calib_velo_to_cam.txt"
+# calib_velo_to_cam = "data/2011_09_30_calib/2011_09_30/calib_velo_to_cam.txt"
 # # Raw KITTI cam-to-cam calibration file. Preferred when projecting raw Velodyne.
-# calib_cam_to_cam = "C:/Users/DELL/Documents/kittiVO/data/2011_09_30_calib/2011_09_30/calib_cam_to_cam.txt"
+# calib_cam_to_cam = "data/2011_09_30_calib/2011_09_30/calib_cam_to_cam.txt"
 # # Number of digits in Velodyne filenames. Leave commented to use image_digits.
 # lidar_digits = 10
+
+[sequence10]
+############## SEQUENCE 10 ########################
+# Directory containing rectified grayscale image_00 PNG files.
+img_dir = "data/data_odometry_gray/dataset/sequences/10/image_0"
+# KITTI odometry calibration file; P0 is used for the monocular camera intrinsics.
+calib = "data/data_odometry_gray/dataset/sequences/10/calib.txt"
+# KITTI odometry pose file; used only for GT geometry/triangulation diagnostics.
+poses = "data/data_odometry_poses/dataset/poses/10.txt"
+# Number of digits in image filenames, e.g. 0000000000.png -> 10.
+image_digits = 6
+# Directory containing KITTI Velodyne .bin files. Leave commented to disable LiDAR.
+velodyne_dir = "data/2011_09_30_drive_0034_sync/velodyne_points/data"
+# Raw KITTI velo-to-camera calibration file. Needed for raw Velodyne projection.
+calib_velo_to_cam = "data/2011_09_30_calib/2011_09_30/calib_velo_to_cam.txt"
+# Raw KITTI cam-to-cam calibration file. Preferred when projecting raw Velodyne.
+calib_cam_to_cam = "data/2011_09_30_calib/2011_09_30/calib_cam_to_cam.txt"
+# Number of digits in Velodyne filenames. Leave commented to use image_digits.
+lidar_digits = 10
 
 
 [run]
@@ -121,7 +121,7 @@ sigma = 1.6
 
 [lk]
 # Enables LK-first tracking before descriptor association.
-lk_on = false
+lk_on = true
 # If true, LK tracks must also find a nearby acceptable SIFT descriptor refresh.
 lk_require_desc_refresh = false
 # LK window side length in pixels.
@@ -413,3 +413,14 @@ error_vmax_abs = 10.0
 max_vis_points = 6000
 # If true, also draw projected LiDAR samples on visualization images.
 show_lidar_vis_points = false
+
+# --- absolute per-sequence override (appended; last-wins in config flattening) ---
+[seq_override]
+img_dir = "C:/Users/DELL/Dropbox/PC/Documents/kittiVO/data/data_odometry_gray/dataset/sequences/00/image_0"
+calib = "C:/Users/DELL/Dropbox/PC/Documents/kittiVO/data/data_odometry_gray/dataset/sequences/00/calib.txt"
+poses = "C:/Users/DELL/Dropbox/PC/Documents/kittiVO/data/data_odometry_poses/dataset/poses/00.txt"
+image_digits = 6
+velodyne_dir = "C:/Users/DELL/Dropbox/PC/Documents/kittiVO/data/2011_10_03_drive_0027_sync/velodyne_points/data"
+calib_velo_to_cam = "C:/Users/DELL/Dropbox/PC/Documents/kittiVO/data/2011_10_03_calib/2011_10_03/calib_velo_to_cam.txt"
+calib_cam_to_cam = "C:/Users/DELL/Dropbox/PC/Documents/kittiVO/data/2011_10_03_calib/2011_10_03/calib_cam_to_cam.txt"
+lidar_digits = 10

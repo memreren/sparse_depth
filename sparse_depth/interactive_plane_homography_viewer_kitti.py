@@ -15,15 +15,17 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 
 import cv2
 import numpy as np
 
 from sparse_depth.config_io import load_argparse_defaults
 from sparse_depth.ground_plane import (
-    Plane, level_ground_plane, plane_homography, ray_plane_depth, road_trapezoid_mask,
-    robust_warp_residual, warp_source_to_target,
+    Plane, fit_plane_ransac, level_ground_plane, plane_homography, ray_plane_depth,
+    road_trapezoid_mask, robust_warp_residual, warp_source_to_target,
 )
+from sparse_depth.ground_calibration import GroundCalibration
 from sparse_depth.plane_validation import ValidationPolicy, symmetric_photometric_gate
 from sparse_depth.interactive_feature_manager_kitti import parse_args as parse_manager_args
 from sparse_depth.kitti_io import (
@@ -61,6 +63,15 @@ class PlaneConfig:
     homography_roi_top_left_frac: float = 0.25
     homography_roi_top_right_frac: float = 0.75
     residual_mad_scale: float = 3.5
+    lidar_plane_thresh_m: float = 0.06
+    lidar_plane_min_inliers: int = 40
+    calibration_path: Optional[str] = None
+    # On-plane membership (ZNCC) gate; tunable from TOML.
+    gate_zncc_threshold: float = 0.35
+    gate_patch_radius_px: int = 4
+    gate_min_patch_std: float = 5.0
+    gate_sparse_reproj_thresh_px: float = 2.0
+    gate_min_sparse_inliers: int = 12
 
 
 def depth_colormap(depth: np.ndarray, lo: float, hi: float) -> np.ndarray:
@@ -88,8 +99,26 @@ class Viewer:
         self.lidar_projection = self._prepare_lidar()
         self.lidar_uv = np.empty((0, 2), dtype=np.float64)
         self.lidar_z = np.empty((0,), dtype=np.float64)
+        self.lidar_xyz = np.empty((0, 3), dtype=np.float64)
+        self.lidar_plane: Optional[Plane] = None
+        self.lidar_plane_stats: dict = {}
+        self.calibration: Optional[GroundCalibration] = None
+        if getattr(plane_cfg, "calibration_path", None):
+            cpath = Path(plane_cfg.calibration_path)
+            if cpath.exists():
+                self.calibration = GroundCalibration.load(cpath)
+                print(f"[calib] loaded {cpath}: pitch {self.calibration.pitch_deg:+.3f} "
+                      f"roll {self.calibration.roll_deg:+.3f} h {self.calibration.height_m:.3f}")
+            else:
+                print(f"[calib] calibration_path not found: {cpath}")
         self.selected_lidar = None
-        self.validation_policy = ValidationPolicy()
+        self.validation_policy = ValidationPolicy(
+            patch_radius_px=int(plane_cfg.gate_patch_radius_px),
+            min_patch_std=float(plane_cfg.gate_min_patch_std),
+            zncc_threshold=float(plane_cfg.gate_zncc_threshold),
+            sparse_reproj_thresh_px=float(plane_cfg.gate_sparse_reproj_thresh_px),
+            min_sparse_inliers=int(plane_cfg.gate_min_sparse_inliers),
+        )
         self.cache = OrderedDict()
         self.evaluation_cache = OrderedDict()
         self.timings = {"load_ms": np.nan, "manager_ms": np.nan, "homography_ms": np.nan, "scale_ms": np.nan, "lidar_ms": np.nan, "photometric_ms": np.nan, "cache_ms": np.nan, "total_ms": np.nan}
@@ -109,13 +138,42 @@ class Viewer:
 
     def _load_lidar(self):
         if self.lidar_projection is None or self.cfg.velodyne_dir is None:
-            return np.empty((0, 2)), np.empty((0,))
+            return np.empty((0, 2)), np.empty((0,)), np.empty((0, 3))
         digits = self.cfg.lidar_digits if self.cfg.lidar_digits is not None else self.cfg.image_digits
         path = self.cfg.velodyne_dir / f"{self.frame:0{digits}d}.bin"
         if not path.exists():
-            return np.empty((0, 2)), np.empty((0,))
+            return np.empty((0, 2)), np.empty((0,)), np.empty((0, 3))
         T, R, P = self.lidar_projection
-        return project_velodyne_to_image(load_velodyne_bin(path), T, R, P, self.image.shape, self.cfg.min_lidar_depth_m, self.cfg.max_lidar_depth_m)[:2]
+        return project_velodyne_to_image(load_velodyne_bin(path), T, R, P, self.image.shape, self.cfg.min_lidar_depth_m, self.cfg.max_lidar_depth_m)[:3]
+
+    def _fit_lidar_plane(self):
+        """RANSAC-fit the road plane to camera-frame LiDAR points inside the ROI.
+
+        This is the per-frame ground-truth road normal n*(i) and height h*(i):
+        select LiDAR returns whose projection lands in the road trapezoid and the
+        trusted depth band, then robustly fit a plane to their 3-D camera-frame
+        coordinates (rect_xyz from project_velodyne_to_image).
+        """
+        if self.lidar_xyz.size == 0 or self.lidar_uv.size == 0:
+            return None, {"reason": "no_lidar", "n_road": 0, "n_inliers": 0, "rms": np.nan}
+        roi = self._roi()
+        h, w = self.image.shape[:2]
+        uv = np.rint(self.lidar_uv).astype(int)
+        inside = (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)
+        road = np.zeros(len(uv), dtype=bool)
+        road[inside] = roi[uv[inside, 1], uv[inside, 0]]
+        road &= (self.lidar_z >= self.plane_cfg.min_depth_m) & (self.lidar_z <= self.plane_cfg.max_depth_m)
+        plane, inliers, rms = fit_plane_ransac(
+            self.lidar_xyz[road], thresh_m=self.plane_cfg.lidar_plane_thresh_m,
+            min_inliers=int(self.plane_cfg.lidar_plane_min_inliers),
+        )
+        stats = {
+            "reason": "ok" if plane is not None else "fit_failed",
+            "n_road": int(np.sum(road)),
+            "n_inliers": int(np.sum(inliers)) if plane is not None else 0,
+            "rms": rms,
+        }
+        return plane, stats
 
     def _image(self, frame: int):
         image = load_gray(self.cfg.img_dir, frame, self.cfg.image_digits)
@@ -131,7 +189,7 @@ class Viewer:
         # Evaluation products are replaced wholesale on every _evaluate() and
         # never mutated in place. Keep references: deep-copying several dense
         # maps per method made every forward frame needlessly expensive.
-        self.evaluation_cache[self.frame] = (self.result, self.methods, self.lidar_uv, self.lidar_z, self.scale_result, self.ransac_plane_raw, self.gt_baseline_m, self.scale_rot_err_deg, self.scale_t_err_deg, dict(self.timings))
+        self.evaluation_cache[self.frame] = (self.result, self.methods, self.lidar_uv, self.lidar_z, self.scale_result, self.ransac_plane_raw, self.gt_baseline_m, self.scale_rot_err_deg, self.scale_t_err_deg, self.lidar_plane, self.lidar_plane_stats, dict(self.timings))
         self.evaluation_cache.move_to_end(self.frame)
         while len(self.evaluation_cache) > self.plane_cfg.evaluation_cache_size: self.evaluation_cache.popitem(last=False)
         self.timings["cache_ms"] = 1000 * (time.perf_counter() - start)
@@ -141,7 +199,7 @@ class Viewer:
         self.manager.tracks = copy.deepcopy(tracks); self.manager.next_id = next_id; self.manager.prev_image = prev_image.copy() if prev_image is not None else None; self.manager.prev_frame = prev_frame; self.manager.current_frame = frame; self.manager.last_stats = copy.deepcopy(last_stats)
         self.frame, self.image = frame, image.copy(); self.cache.move_to_end(frame)
         if frame in self.evaluation_cache:
-            (self.result, self.methods, self.lidar_uv, self.lidar_z, self.scale_result, self.ransac_plane_raw, self.gt_baseline_m, self.scale_rot_err_deg, self.scale_t_err_deg, self.timings) = self.evaluation_cache[frame]
+            (self.result, self.methods, self.lidar_uv, self.lidar_z, self.scale_result, self.ransac_plane_raw, self.gt_baseline_m, self.scale_rot_err_deg, self.scale_t_err_deg, self.lidar_plane, self.lidar_plane_stats, self.timings) = self.evaluation_cache[frame]
             self.evaluation_cache.move_to_end(frame); self.timings["manager_ms"] = 0.0
         else:
             self._evaluate(); self._save_snapshot(); self.timings["manager_ms"] = 0.0
@@ -164,7 +222,7 @@ class Viewer:
         self.result = estimate_lower_image_homography(self.manager.tracks, self.frame, self.image.shape, self.plane_cfg)
         self.timings["homography_ms"] = 1000 * (time.perf_counter() - start)
         start = time.perf_counter()
-        self.lidar_uv, self.lidar_z = self._load_lidar()
+        self.lidar_uv, self.lidar_z, self.lidar_xyz = self._load_lidar()
         self.timings["lidar_ms"] = 1000 * (time.perf_counter() - start)
         self.selected_lidar = None
         source = self._image(self.result.source_frame) if self.result.source_frame >= 0 else None
@@ -198,9 +256,22 @@ class Viewer:
             self.methods["scale"] = self._make_method("Estimated pose + scale RANSAC", H_scale, fixed, source, np.nan)
         else:
             self.methods["scale"] = {"name": "Estimated pose + scale RANSAC", "reason": self.scale_result.reason, "plane": fixed}
+        self.lidar_plane, self.lidar_plane_stats = self._fit_lidar_plane()
+        if self.lidar_plane is not None:
+            self.methods["lidar"] = self._make_method("LiDAR road-plane fit", plane_homography(self.K, R, t, self.lidar_plane), self.lidar_plane, source, np.nan)
+        else:
+            self.methods["lidar"] = {"name": "LiDAR road-plane fit", "reason": self.lidar_plane_stats.get("reason", "no_lidar"), "plane": fixed}
+        self.methods["lidar"]["fit_stats"] = self.lidar_plane_stats
+        if self.calibration is not None:
+            calib_plane = self.calibration.plane()
+            self.methods["calib"] = self._make_method("Calibrated offset plane", plane_homography(self.K, R, t, calib_plane), calib_plane, source, np.nan)
+        else:
+            self.methods["calib"] = {"name": "Calibrated offset plane", "reason": "no_calibration", "plane": fixed}
         self._attach_sparse_stats("gt", self.result.candidate_ids)
         self._attach_sparse_stats("ransac", self.result.candidate_ids)
         self._attach_sparse_stats("scale", self.scale_result.candidate_ids)
+        self._attach_sparse_stats("lidar", self.result.candidate_ids)
+        self._attach_sparse_stats("calib", self.result.candidate_ids)
         self.timings["photometric_ms"] = 1000 * (time.perf_counter() - start)
         self.timings["total_ms"] = 1000 * (time.perf_counter() - total)
 
@@ -270,7 +341,7 @@ class Viewer:
         target_bgr = cv2.cvtColor(target, cv2.COLOR_GRAY2BGR)
         roi = self._roi()
         source_frame = self.result.source_frame
-        method_key = ("gt", "ransac", "scale")[self.method_index]
+        method_key = ("gt", "ransac", "scale", "lidar", "calib")[self.method_index]
         method = self.methods[method_key]
         warped = method.get("warped", target)
         residual = method.get("residual", np.full(target.shape, np.nan))
@@ -323,27 +394,44 @@ class Viewer:
             angle = np.degrees(np.arccos(np.clip(float(np.dot(raw_plane.normal, down)), -1.0, 1.0)))
             normal_line = f"RANSAC n(raw): [{raw_plane.normal[0]:+.3f}, {raw_plane.normal[1]:+.3f}, {raw_plane.normal[2]:+.3f}] | angle-to-down {angle:.2f} deg"
             raw_plane_line = f"RANSAC d(raw from H+GT pose): {raw_plane.offset:+.3f} m | depth uses d=-h"
+        if self.lidar_plane is not None:
+            down = np.array([0.0, 1.0, 0.0])
+            lidar_angle = np.degrees(np.arccos(np.clip(float(np.dot(self.lidar_plane.normal, down)), -1.0, 1.0)))
+            lidar_fit_line = (
+                f"LiDAR-fit n*: [{self.lidar_plane.normal[0]:+.3f}, {self.lidar_plane.normal[1]:+.3f}, {self.lidar_plane.normal[2]:+.3f}] "
+                f"angle-down {lidar_angle:.2f} deg | h*={-self.lidar_plane.offset:.3f} m | "
+                f"inl {self.lidar_plane_stats.get('n_inliers', 0)}/{self.lidar_plane_stats.get('n_road', 0)} rms {self.lidar_plane_stats.get('rms', float('nan')):.3f} m"
+            )
+        else:
+            lidar_fit_line = f"LiDAR-fit n*: {self.lidar_plane_stats.get('reason', 'n/a')}"
+        if self.calibration is not None:
+            calib_line = (
+                f"Calib plane: pitch {self.calibration.pitch_deg:+.3f} roll {self.calibration.roll_deg:+.3f} deg | "
+                f"h {self.calibration.height_m:.3f} m | {self.calibration.n_frames} frames"
+            )
+        else:
+            calib_line = "Calib plane: none (set calibration_path in config)"
         lines = [
             "2-D plane-homography inspector", f"target/source: {self.frame} / {source_frame}", f"mode: {title}",
-            f"method: {method['name']} | z/x/c select GT/H/scale", f"method status: {method.get('reason')} | decomp RMSE {method.get('rmse', np.nan):.3g}",
+            f"method: {method['name']} | z/x/c/v/g select GT/H/scale/LiDAR/Calib", f"method status: {method.get('reason')} | decomp RMSE {method.get('rmse', np.nan):.3g}",
             f"sparse validation: {method.get('sparse_inliers', 0)} inliers | median {method.get('sparse_median', np.nan):.2f}px | healthy={method.get('geometry_ok', False)}",
             f"camera height h: {self.plane_cfg.camera_height_m:.3f} m (j/k changes by 0.020 m)",
-            normal_line, raw_plane_line,
+            normal_line, raw_plane_line, lidar_fit_line, calib_line,
             f"scale RANSAC: {self.scale_result.reason} | s={self.scale_result.scale_m:.3f}m | road inl {len(self.scale_result.inlier_ids)} | med {self.scale_result.median_reproj_px:.2f}px",
             f"Essential pose: {self.scale_result.pose_inliers}/{self.scale_result.pose_pairs} | R err {self.scale_rot_err_deg:.2f} deg | t-dir err {self.scale_t_err_deg:.2f} deg",
             f"GT baseline: {self.gt_baseline_m:.3f} m",
             f"RANSAC: {len(self.result.inlier_ids)}/{len(self.result.candidate_ids)} inliers", f"median reproj: {self.result.median_reproj_px:.2f}px | {self.result.reason}",
             f"threshold: {self.plane_cfg.homography_ransac_thresh_px:.2f}px | gap {self.plane_cfg.homography_gap}",
             f"raw residual median/threshold: {residual_median:.1f}/{residual_threshold:.1f}", "",
-            *[f"LiDAR {key} ROI: n={all_metrics[key][0][0]} | mean/med AbsRel {all_metrics[key][0][1]:.3f}/{all_metrics[key][0][2]:.3f}" for key in ("gt", "ransac", "scale")],
-            *[f"LiDAR {key} ZNCC keep gray+green: n={all_metrics[key][1][0]} | mean/med AbsRel {all_metrics[key][1][1]:.3f}/{all_metrics[key][1][2]:.3f}" for key in ("gt", "ransac", "scale")],
+            *[f"LiDAR {key} ROI: n={all_metrics[key][0][0]} | mean/med AbsRel {all_metrics[key][0][1]:.3f}/{all_metrics[key][0][2]:.3f}" for key in ("gt", "ransac", "scale", "lidar", "calib")],
+            *[f"LiDAR {key} ZNCC keep gray+green: n={all_metrics[key][1][0]} | mean/med AbsRel {all_metrics[key][1][1]:.3f}/{all_metrics[key][1][2]:.3f}" for key in ("gt", "ransac", "scale", "lidar", "calib")],
             f"depth scale {self.plane_cfg.min_depth_m:.0f}m red -> {self.plane_cfg.max_depth_m:.0f}m blue", "",
             f"timing ms: load {self.timings['load_ms']:.1f} | mgr {self.timings['manager_ms']:.1f} | H {self.timings['homography_ms']:.1f} | scale {self.timings['scale_ms']:.1f}",
             f"timing ms: LiDAR {self.timings['lidar_ms']:.1f} | dense-photo {self.timings['photometric_ms']:.1f} | cache {self.timings['cache_ms']:.1f} | eval-total {self.timings['total_ms']:.1f}",
             f"cache: {len(self.cache)}/{self.plane_cfg.cache_size} frames",
             f"last command: {self.last_action}",
             "1..5: inliers/blend/raw/ZNCC/depth | m: next",
-            "z/x/c: GT-H / generic-H / scale-RANSAC | j/k: height",
+            "z/x/c/v/g: GT-H / generic-H / scale / LiDAR-fit / Calib | j/k: height",
             "n/b: frame | click main/LiDAR: diagnostic | s: screenshot | q: quit",
         ]
         y = 22
@@ -382,7 +470,7 @@ class Viewer:
     def _inspect_pixel(self, point):
         x, y = np.rint(point).astype(int); h, w = self.image.shape[:2]
         if not (0 <= x < w and 0 <= y < h): return
-        data = self.methods[("gt", "ransac", "scale")[self.method_index]]
+        data = self.methods[("gt", "ransac", "scale", "lidar", "calib")[self.method_index]]
         depth = data.get("depth", np.full(self.image.shape, np.nan)); gate = data.get("photometric_gate", np.zeros(self.image.shape, bool))
         if self.lidar_uv.size:
             distances = np.linalg.norm(self.lidar_uv - np.array([[x, y]]), axis=1); i = int(np.argmin(distances))
@@ -435,6 +523,8 @@ class Viewer:
             elif key in (ord("z"), ord("Z")): self.method_index = 0; self.last_action = "method GT"
             elif key in (ord("x"), ord("X")): self.method_index = 1; self.last_action = "method generic H"
             elif key in (ord("c"), ord("C")): self.method_index = 2; self.last_action = "method scale RANSAC"
+            elif key in (ord("v"), ord("V")): self.method_index = 3; self.last_action = "method LiDAR fit"
+            elif key in (ord("g"), ord("G")): self.method_index = 4; self.last_action = "method calibrated"
             elif key in (ord("j"), ord("J")):
                 self.plane_cfg.camera_height_m = max(0.10, self.plane_cfg.camera_height_m - 0.02); self.evaluation_cache.clear(); self._evaluate(); self._save_snapshot()
                 self.last_action = f"height {self.plane_cfg.camera_height_m:.3f} m"

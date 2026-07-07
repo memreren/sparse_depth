@@ -1043,7 +1043,7 @@ def parse_args() -> Config:
 
     # Geometry/triangulation diagnostics. GT geometry is used only to assess
     # whether current-past observations are good candidates for triangulation.
-    p.add_argument("--triangulation-method", choices=["best_pair_dlt", "flow_depth_pair", "refined_pair_dlt", "corrected_pair_dlt", "windowed_multiview_dlt", "refined_multiview_dlt", "hybrid_pair_multiview"], default="best_pair_dlt", help="Triangulation backend used by depth/triang views.")
+    p.add_argument("--triangulation-method", choices=["best_pair_dlt", "flow_depth_pair", "ttc_expansion", "ttc_expansion_norot", "refined_pair_dlt", "corrected_pair_dlt", "windowed_multiview_dlt", "refined_multiview_dlt", "hybrid_pair_multiview"], default="best_pair_dlt", help="Triangulation backend used by depth/triang views.")
     p.add_argument("--multiview-min-views", type=int, default=3, help="Minimum current+past observations for windowed multiview DLT.")
     p.add_argument("--hybrid-pair-min-parallax-deg", type=float, default=0.50, help="Stricter minimum parallax for hybrid_pair_multiview pair fallback.")
     p.add_argument("--hybrid-pair-min-baseline", type=float, default=0.5, help="Stricter minimum baseline for hybrid_pair_multiview pair fallback.")

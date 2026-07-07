@@ -9,7 +9,7 @@ coordinates by ``n.T @ X + d = 0``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -40,6 +40,51 @@ def level_ground_plane(camera_height_m: float) -> Plane:
     if camera_height_m <= 0.0:
         raise ValueError("camera_height_m must be positive")
     return Plane(np.array([0.0, 1.0, 0.0]), -float(camera_height_m))
+
+
+def fit_plane_ransac(
+    points: np.ndarray, thresh_m: float = 0.06, iters: int = 300,
+    min_inliers: int = 40, seed: int = 0,
+) -> Tuple[Optional[Plane], np.ndarray, float]:
+    """Robustly fit a plane to an ``N x 3`` point set (e.g. LiDAR road returns).
+
+    Returns ``(Plane, inlier_mask, inlier_rms_m)``, or ``(None, empty, nan)`` when
+    the fit is degenerate or under-supported.  The normal is flipped so its camera
+    down-component is positive, matching the level-road convention ``n ~ [0, 1, 0]``,
+    ``offset ~ -height``.  A total-least-squares (PCA) refit is run on the RANSAC
+    consensus set for a stable final plane.
+    """
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    n_pts = pts.shape[0]
+    if n_pts < max(3, min_inliers):
+        return None, np.zeros(n_pts, dtype=bool), np.nan
+    rng = np.random.default_rng(seed)
+    best_inliers, best_count = None, 0
+    for _ in range(int(iters)):
+        idx = rng.choice(n_pts, size=3, replace=False)
+        p0, p1, p2 = pts[idx]
+        normal = np.cross(p1 - p0, p2 - p0)
+        norm = float(np.linalg.norm(normal))
+        if norm < 1e-9:
+            continue
+        normal = normal / norm
+        offset = -float(normal @ p0)
+        inliers = np.abs(pts @ normal + offset) < thresh_m
+        count = int(np.sum(inliers))
+        if count > best_count:
+            best_count, best_inliers = count, inliers
+    if best_inliers is None or best_count < min_inliers:
+        return None, np.zeros(n_pts, dtype=bool), np.nan
+    inlier_pts = pts[best_inliers]
+    centroid = inlier_pts.mean(axis=0)
+    _, _, vh = np.linalg.svd(inlier_pts - centroid, full_matrices=False)
+    normal = vh[-1]
+    normal = normal / np.linalg.norm(normal)
+    if normal[1] < 0.0:
+        normal = -normal
+    offset = -float(normal @ centroid)
+    rms = float(np.sqrt(np.mean((inlier_pts @ normal + offset) ** 2)))
+    return Plane(normal, offset), best_inliers, rms
 
 
 def plane_homography(K: np.ndarray, R_ts: np.ndarray, t_ts: np.ndarray, plane: Plane) -> np.ndarray:

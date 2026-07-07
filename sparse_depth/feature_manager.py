@@ -37,7 +37,15 @@ class FeatureManager:
     def __init__(self, cfg: Config, K: np.ndarray, poses: Sequence[np.ndarray]):
         self.cfg = cfg
         self.K = K
-        self.poses = poses
+        self.poses = poses          # GT poses: used for scale + the pose diagnostic
+        # Estimated-pose mode (enabled via enable_estimated_pose). When on, every
+        # pose-using gate reads self.est_poses (a causally-filled frame-to-frame
+        # chain) instead of GT; GT is used only for per-step translation scale.
+        self.pose_mode = "gt"
+        self.est_poses = None
+        self.pose_diag = []
+        self._est_start = None
+        self._est_filled = set()
         self.primary_sift = make_sift(
             cfg.sift_nfeatures, cfg.sift_n_octave_layers,
             cfg.sift_contrast_threshold, cfg.sift_edge_threshold, cfg.sift_sigma,
@@ -210,13 +218,25 @@ class FeatureManager:
             return assigned_lk
 
         h, w = image.shape[:2]
+        # Estimated-pose mode: fit this frame's pose from the RAW LK matches
+        # (before any epipolar gating), so the LK epipolar gate below AND later
+        # triangulation both run on the estimated geometry. The RANSAC inlier mask
+        # is used only to fit E robustly, never to filter tracks.
+        if self.pose_mode == "estimated":
+            valid = (st_f.reshape(-1) == 1) & (st_b.reshape(-1) == 1)
+            if int(np.count_nonzero(valid)) >= self.cfg.pose_min_pairs:
+                self._fill_est_step(
+                    frame,
+                    pts_i=prev_pts.reshape(-1, 2)[valid],
+                    pts_j=next_pts.reshape(-1, 2)[valid],
+                )
         fb_vals = []
         err_vals = []
         candidates = []
         F_lk = None
         if cfg.lk_epipolar_thresh_px > 0.0:
             try:
-                R_lk, t_lk = relative_pose(self.poses, self.prev_frame, frame)
+                R_lk, t_lk = relative_pose(self._geom_poses(), self.prev_frame, frame)
                 F_lk = fundamental_from_R_t(self.K, R_lk, t_lk)
             except Exception:
                 F_lk = None
@@ -1064,12 +1084,66 @@ class FeatureManager:
             selected = selected[: max_tracks]
         return selected
 
+    def enable_estimated_pose(self, start_frame: int) -> None:
+        """Switch every pose-using gate onto an estimated frame-to-frame chain.
+
+        The chain is initialised from GT (future entries are never read before
+        being overwritten) and filled causally: entry ``k`` is set the first time
+        frame ``k`` is processed, from that step's correspondences. GT is used
+        only for per-step translation scale and for the pose diagnostic.
+        """
+        import numpy as _np
+        self.pose_mode = "estimated"
+        self._est_start = int(start_frame)
+        self.est_poses = [_np.asarray(p, dtype=_np.float64).copy() for p in self.poses]
+        self.pose_diag = []
+        self._est_filled = {int(start_frame)}
+
+    def _geom_poses(self):
+        """Poses used by pose-dependent GATES (LK epipolar, triangulation)."""
+        return self.est_poses if self.pose_mode == "estimated" else self.poses
+
+    def _fill_est_step(self, frame, pts_i=None, pts_j=None, tracks=None) -> None:
+        """Estimate + chain the consecutive (frame-1 -> frame) pose, idempotently.
+
+        Prefers raw match arrays (the LK path, available before the LK epipolar
+        gate); falls back to gathering from tracks (the LK-off / triangulation
+        path). Fills self.est_poses[frame] exactly once per frame.
+        """
+        if self.pose_mode != "estimated":
+            return
+        import numpy as _np
+        from sparse_depth.pose_backend import estimate_from_matches, estimate_step
+        frame = int(frame)
+        if frame <= self._est_start or frame in self._est_filled:
+            return
+        i, j = frame - 1, frame
+        if pts_i is not None and _np.asarray(pts_i).reshape(-1, 2).shape[0] >= self.cfg.pose_min_pairs:
+            R, t, est = estimate_from_matches(pts_i, pts_j, i, j, self.K, self.poses, self.cfg)
+        else:
+            tk = tracks if tracks is not None else self.active_tracks(frame, confirmed_only=False)
+            R, t, est = estimate_step(tk, i, j, self.K, self.poses, self.cfg)
+        T_rel = _np.eye(4, dtype=_np.float64)
+        T_rel[:3, :3] = R
+        T_rel[:3, 3] = t
+        self.est_poses[j] = self.est_poses[i] @ _np.linalg.inv(T_rel)
+        self._est_filled.add(j)
+        self.pose_diag.append(est)
+
+    def pose_summary(self) -> dict:
+        from sparse_depth.pose_backend import summarize_steps
+        return summarize_steps(self.pose_diag)
+
     def evaluate_triang_candidates(self, frame: int, compute_dlt: bool = True, fast: bool = False) -> Dict[int, TriangInfo]:
+        # Ensure this frame's estimated pose exists (LK-off path fills here from
+        # tracks; the LK path already filled it before the epipolar gate), then
+        # triangulate against the estimated chain in estimated mode, else GT.
+        self._fill_est_step(frame)
         return evaluate_best_pair_triangulation(
             self.active_tracks(frame, confirmed_only=False),
             frame,
             self.K,
-            self.poses,
+            self._geom_poses(),
             self.cfg,
             compute_dlt=compute_dlt,
             fast=fast,

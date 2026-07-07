@@ -1312,7 +1312,10 @@ def parse_args():
     p.add_argument("--min-spawn-distance", type=float, default=7.0)
     p.add_argument("--spawn-count-confirmed-only", dest="spawn_count_candidates", action="store_false", default=True)
 
-    p.add_argument("--triangulation-method", choices=["best_pair_dlt", "flow_depth_pair", "refined_pair_dlt", "corrected_pair_dlt", "windowed_multiview_dlt", "refined_multiview_dlt", "hybrid_pair_multiview"], default="best_pair_dlt")
+    p.add_argument("--triangulation-method", choices=["best_pair_dlt", "flow_depth_pair", "ttc_expansion", "ttc_expansion_norot", "refined_pair_dlt", "corrected_pair_dlt", "windowed_multiview_dlt", "refined_multiview_dlt", "hybrid_pair_multiview"], default="best_pair_dlt")
+    p.add_argument("--pose-source", choices=["gt", "estimated"], default="gt",
+                   help="Pose used for triangulation/TTC. 'estimated' runs a frame-to-frame "
+                        "essential-matrix backend (GT scale per step); tracking always uses GT.")
     p.add_argument("--multiview-min-views", type=int, default=3)
     p.add_argument("--hybrid-pair-min-parallax-deg", type=float, default=0.50)
     p.add_argument("--hybrid-pair-min-baseline", type=float, default=0.5)
@@ -1359,6 +1362,12 @@ def main():
     cfg = make_manager_config(args)
     manager = FeatureManager(cfg, K, poses)
     lidar_projection = prepare_lidar_projection(args)
+    # Estimated-pose mode: every pose-using gate (LK epipolar + triangulation)
+    # runs on a frame-to-frame estimated chain; GT is used only for per-step
+    # scale and the pose diagnostic. Enabled on the manager so it is applied
+    # consistently inside tracking, not just at triangulation.
+    if args.pose_source == "estimated":
+        manager.enable_estimated_pose(args.start)
 
     with open(args.output_root / "config.json", "w") as f:
         json.dump({k: json_safe_value(v) for k, v in vars(args).items()}, f, indent=2)
@@ -1553,6 +1562,14 @@ def main():
         write_csv_rows(args.output_root / "matched_point_diagnostics.csv", diagnostic_point_rows)
         summarize_point_bins(diagnostic_point_rows, args.output_root)
     summary = make_summary(rows)
+    summary["pose_source"] = args.pose_source
+    if args.pose_source == "estimated":
+        ps = manager.pose_summary()
+        summary.update(ps)
+        print(f"[pose] estimated: {ps.get('pose_steps',0)} steps, "
+              f"fallback {ps.get('pose_fallback_rate',float('nan')):.3f}, "
+              f"median rot_err {ps.get('pose_median_rot_err_deg',float('nan')):.3f} deg, "
+              f"median t_dir_err {ps.get('pose_median_t_err_deg',float('nan')):.3f} deg")
     with open(args.output_root / "summary_metrics.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(summary.keys()))
         writer.writeheader()

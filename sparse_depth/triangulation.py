@@ -553,6 +553,100 @@ def _flow_depth_pair_current(
     return X_current, X_past, float(X_current[2]), float(X_past[2]), reproj_rmse
 
 
+def _ttc_expansion_pair_current(
+    K: np.ndarray,
+    K_inv: np.ndarray,
+    R_past_to_current: np.ndarray,
+    t_past_to_current: np.ndarray,
+    past_pt: np.ndarray,
+    curr_pt: np.ndarray,
+    use_rotation: bool = True,
+):
+    """Discrete time-to-contact (radial expansion) depth for one correspondence.
+
+    This is the TTC counterpart of ``_flow_depth_pair_current``. Instead of a
+    least-squares ray intersection, it uses the focus-of-expansion (FOE, i.e. the
+    epipole = image of the translation direction) and the *radial* motion of the
+    feature away from it. With the known GT rotation the past feature is first
+    de-rotated into the current frame, so the residual displacement is purely
+    translational and streams radially out of the FOE.
+
+    Geometry (current-camera frame, ``X_current = R X_past + t``):
+      * ``g   = R * ray_past``  -> de-rotated past bearing;
+      * ``e   = pi(t)``         -> FOE, where translational flow vanishes;
+      * ``pinf= pi(g)``         -> where the point would sit if infinitely far;
+      * ``pj  = pi(ray_curr)``  -> the measured current feature.
+    All three of ``e, pinf, pj`` are colinear on the epipolar line, so the signed
+    radial ratio ``rho = (pj - e) / (pinf - e)`` obeys ``rho = 1 - t_z / Z``.
+    Hence the scale-free time-to-contact and metric depth are
+
+        tau = 1 / (rho - 1)            # image-only, no metric scale
+        Z   = t_z / (1 - rho) = Vz*tau # metric, Vz = t_z is this pair's
+                                       #   forward baseline component
+
+    ``rho`` is measured by projecting ``pj - e`` onto the (ideally identical)
+    direction ``pinf - e``, which is the least-squares radial coordinate when
+    pixel noise pushes ``pj`` slightly off the epipolar line. Returns the same
+    5-tuple as the other pair solvers (or ``None`` on a degenerate configuration:
+    near-lateral motion, a bearing pointing straight at the FOE, or no
+    measurable expansion -- all cases where depth is unobservable).
+
+    NOTE: because ``t_z`` (metric forward baseline) is used to lift ``tau`` to
+    metric depth, with GT poses this is numerically a triangulation estimator
+    expressed in the radial/FOE parameterization. Its distinct value shows up
+    under the forward-motion conditioning analysis and the input ablations where
+    scale/pose are withheld; ``tau`` itself is the scale-free quantity to expose
+    there.
+    """
+    t = np.asarray(t_past_to_current, dtype=np.float64).reshape(3)
+    t_z = float(t[2])
+    if abs(t_z) < 1e-9:
+        return None  # near-lateral motion: FOE at infinity, TTC undefined
+
+    # Rotation-free arm (use_rotation=False): keep the epipole and t_z from t, but
+    # DROP de-rotation (R := I). The estimator then consumes epipole + forward
+    # scale only -- immune to rotation-estimation error, at the cost of a bias
+    # that grows with real inter-frame rotation. Used to test whether TTC degrades
+    # differently from triangulation under estimated pose.
+    R_eff = R_past_to_current if use_rotation else np.eye(3, dtype=np.float64)
+
+    q = K_inv @ np.array([curr_pt[0], curr_pt[1], 1.0], dtype=np.float64)
+    ray_past = K_inv @ np.array([past_pt[0], past_pt[1], 1.0], dtype=np.float64)
+    g = R_eff @ ray_past
+    if abs(g[2]) < 1e-12 or abs(q[2]) < 1e-12:
+        return None
+
+    e = t[:2] / t_z                 # FOE (normalized image coords)
+    p_inf = g[:2] / g[2]            # de-rotated past feature (point at infinity)
+    p_j = q[:2] / q[2]              # current feature
+
+    radial = p_inf - e             # epipolar-line direction from the FOE
+    den = float(np.dot(radial, radial))
+    if den < 1e-12:
+        return None  # bearing points straight at the FOE: no parallax, unobservable
+
+    rho = float(np.dot(p_j - e, radial) / den)
+    one_minus_rho = 1.0 - rho
+    if abs(one_minus_rho) < 1e-9:
+        return None  # no measurable expansion: depth -> infinity
+
+    depth = t_z / one_minus_rho
+    X_current = depth * q          # q has z==1, so X_current[2] == depth
+    R_current_to_past = R_eff.T
+    t_current_to_past = -R_current_to_past @ t
+    X_past = R_current_to_past @ X_current + t_current_to_past
+
+    if abs(X_current[2]) < 1e-12 or abs(X_past[2]) < 1e-12:
+        return None
+
+    curr_hat = project_points(K, X_current)[0]
+    past_hat = project_points(K, X_past)[0]
+    curr_err = float(np.linalg.norm(curr_hat - np.asarray(curr_pt, dtype=np.float64).reshape(2)))
+    past_err = float(np.linalg.norm(past_hat - np.asarray(past_pt, dtype=np.float64).reshape(2)))
+    reproj_rmse = float(np.sqrt(0.5 * (curr_err ** 2 + past_err ** 2)))
+    return X_current, X_past, float(X_current[2]), float(X_past[2]), reproj_rmse
+
+
 def _corrected_pair_dlt_current(
     K: np.ndarray,
     F: np.ndarray,
@@ -1029,6 +1123,128 @@ def _evaluate_flow_depth_pair(
         if best_info is None:
             best_info = _no_pair_info(tr, frame)
             best_info.method = "flow_depth_pair"
+        infos[tr.id] = best_info
+
+    return infos
+
+
+def _evaluate_ttc_expansion(
+    tracks: Iterable[Any],
+    frame: int,
+    K: np.ndarray,
+    poses: Sequence[np.ndarray],
+    cfg: Any,
+    *,
+    compute_dlt: bool = True,
+    fast: bool = False,
+    use_rotation: bool = True,
+) -> Dict[int, TriangInfo]:
+    """Select the best pair, then solve depth with the discrete TTC formula.
+
+    Pair selection and every gate (baseline, GT epipolar error, parallax, depth
+    range, reprojection threshold) are intentionally identical to
+    ``best_pair_dlt`` and ``flow_depth_pair`` so the only variable is the
+    pairwise depth estimator itself. The estimator is
+    ``_ttc_expansion_pair_current`` (radial expansion from the focus of
+    expansion), making this the time-to-contact arm of the method comparison.
+    With ``use_rotation=False`` it becomes the rotation-free arm
+    (``ttc_expansion_norot``): epipole + forward scale, no de-rotation.
+    """
+    method_name = "ttc_expansion" if use_rotation else "ttc_expansion_norot"
+    infos: Dict[int, TriangInfo] = {}
+    geom_cache: Dict[Tuple[int, int], Tuple[np.ndarray, np.ndarray, float, np.ndarray]] = {}
+    K_inv = np.linalg.inv(K)
+    tracks = list(tracks)
+    pair_gates = _precompute_pair_gates(tracks, K, poses, cfg)
+
+    for tr in tracks:
+        if cfg.triang_confirmed_only and not tr.confirmed:
+            continue
+        if tr.hit_count < cfg.triang_min_hits or len(tr.observations) < 2:
+            infos[tr.id] = _no_pair_info(tr, frame)
+            infos[tr.id].method = method_name
+            continue
+        if (not cfg.triang_include_reacquired) and tr.reacq_probation:
+            infos[tr.id] = _no_pair_info(tr, frame, reacquired=True)
+            infos[tr.id].method = method_name
+            continue
+
+        curr_obs = tr.observations[-1]
+        curr_pt = curr_obs.pt.reshape(1, 2)
+        best_info: Optional[TriangInfo] = None
+        obs_candidates = tr.observations[:-1]
+        if cfg.max_pair_history > 0:
+            obs_candidates = [o for o in obs_candidates if curr_obs.frame - o.frame <= cfg.max_pair_history]
+
+        for past_obs in obs_candidates:
+            i, j = int(past_obs.frame), int(curr_obs.frame)
+            if i == j or i < 0 or j >= len(poses):
+                continue
+
+            gate = pair_gates.get((id(tr), int(i)))
+            if gate is None:
+                gate = _pair_geom(K, K_inv, poses, geom_cache, i, j, past_obs.pt, curr_obs.pt)
+            R, t, baseline, _F, epi, par = gate
+            if baseline < cfg.min_baseline_m:
+                continue
+
+            past_pt = past_obs.pt.reshape(1, 2)
+            depth = np.nan
+            reproj = np.nan
+            cheir = False
+
+            if epi > cfg.gt_epi_thresh_px:
+                label = "bad_epi"
+            elif par < cfg.min_parallax_deg:
+                label = "low_parallax"
+            else:
+                label = _good_label(tr)
+                if compute_dlt and not fast:
+                    solved = _ttc_expansion_pair_current(
+                        K,
+                        K_inv,
+                        R,
+                        t,
+                        past_pt.reshape(2),
+                        curr_pt.reshape(2),
+                        use_rotation=use_rotation,
+                    )
+                    if solved is None:
+                        label = "bad_depth"
+                    else:
+                        _X_cur, _X_past, z_cur, z_past, reproj = solved
+                        depth = z_cur
+                        cheir = (z_cur > 0.0 and z_past > 0.0)
+                        if (not cheir) or depth < cfg.min_depth_m or depth > cfg.max_depth_m:
+                            label = "bad_depth"
+                        elif reproj > cfg.reproj_thresh_px:
+                            label = "bad_reproj"
+
+            info = TriangInfo(
+                label,
+                i,
+                j,
+                j - i,
+                epi,
+                par,
+                baseline,
+                depth,
+                reproj,
+                cheir,
+                tr.confirmed,
+                tr.reacq_probation or tr.reacquired_last_step,
+                tr.hit_count,
+                tr.last_source,
+                method_name,
+                2 if np.isfinite(depth) else 0,
+                2 if label in GOOD_TRIANG_LABELS and np.isfinite(depth) else 0,
+            )
+            if best_info is None or _prefer_info(info, best_info):
+                best_info = info
+
+        if best_info is None:
+            best_info = _no_pair_info(tr, frame)
+            best_info.method = method_name
         infos[tr.id] = best_info
 
     return infos
@@ -1629,6 +1845,10 @@ def evaluate_best_pair_triangulation(
         return _evaluate_best_pair_triangulation_impl(tracks, frame, K, poses, cfg, compute_dlt=compute_dlt, fast=fast)
     if method == "flow_depth_pair":
         return _evaluate_flow_depth_pair(tracks, frame, K, poses, cfg, compute_dlt=compute_dlt, fast=fast)
+    if method == "ttc_expansion":
+        return _evaluate_ttc_expansion(tracks, frame, K, poses, cfg, compute_dlt=compute_dlt, fast=fast, use_rotation=True)
+    if method == "ttc_expansion_norot":
+        return _evaluate_ttc_expansion(tracks, frame, K, poses, cfg, compute_dlt=compute_dlt, fast=fast, use_rotation=False)
     if method == "refined_pair_dlt":
         return _evaluate_refined_pair_dlt(tracks, frame, K, poses, cfg, compute_dlt=compute_dlt, fast=fast)
     if method == "corrected_pair_dlt":

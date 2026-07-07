@@ -2,10 +2,10 @@
 
 Monocular **sparse depth from motion** on the KITTI odometry benchmark. The
 pipeline detects keypoints, tracks/matches them across frames, and triangulates
-per-point depth using the dataset's ground-truth camera poses. It is a research
-harness for studying the **coverage ↔ accuracy ↔ compute** trade-offs of
-different feature front-ends, with an interactive viewer and a headless
-evaluator that share the exact same feature-manager code.
+per-point depth. It is a research harness for studying the
+**coverage ↔ accuracy ↔ compute** trade-offs of different feature front-ends,
+with an interactive viewer and a headless evaluator that share the exact same
+feature-manager code.
 
 The pipeline is a *hybrid* front-end built from four orthogonal axes, so you can
 mix and match:
@@ -17,7 +17,14 @@ mix and match:
 | **matcher**    | `radius_lowe` · `xfeat_mnn` | how detections are associated to tracks |
 | **LK tracking**| `--lk-on` / `--no-lk-on` | optical-flow continuation before matching |
 
-Key empirical findings from the built-in ablations (KITTI seq04/seq10):
+Depth is triangulated from **estimated** camera poses by default: a lightweight
+frame-to-frame essential-matrix backend recovers rotation and translation
+*direction*, with the per-step translation *magnitude* taken from the
+ground-truth poses so the metric scale is fixed (monocular vision cannot recover
+absolute scale on its own). Pass `--pose-source gt` to use ground-truth poses
+directly.
+
+Key empirical findings from the ablations (KITTI seq04/seq10):
 
 - The dominant effect is the **detector × tracking interaction**: Shi–Tomasi
   ("good features to *track*") is strongest with LK **on**; SIFT ("good features
@@ -29,25 +36,33 @@ Key empirical findings from the built-in ablations (KITTI seq04/seq10):
   matcher recovers far more points than radius+Lowe on native XFeat descriptors,
   reaching roughly LK-on-classical quality.
 
+## Two entry points
+
+| Script | Purpose |
+|--------|---------|
+| `python -m sparse_depth.interactive_feature_manager_kitti` | **Interactive viewer** — page through frames, inspect tracks/geometry/depth by eye. |
+| `python evaluate_kitti.py` | **Headless evaluator** — run a sequence, write a small CSV of depth metrics, optionally a depth video. |
+
+Both read `configs/default.toml` for data paths and baseline parameters; CLI
+flags override individual values.
+
 ## Repository layout
 
 ```
 sparse_depth/                          the package (front-end + geometry + I/O)
   feature_manager.py                   core hybrid manager (class FeatureManager)
   manager_config.py                    Config dataclass + axis resolution
+  cli_config.py                        CLI flags -> Config (shared by both entry points)
   track_types.py                       Track / Observation / FrameStats
-  interactive_feature_manager_kitti.py interactive OpenCV viewer
+  interactive_feature_manager_kitti.py interactive OpenCV viewer  (entry point 1)
   feature_utils.py                     detectors/descriptors (Shi/SIFT/XFeat)
   xfeat_detector.py                    XFeat wrapper (CPU-forced)
-  triangulation.py                     DLT / multiview / pair triangulation backends
+  triangulation.py                     DLT / multiview / pair / TTC backends
+  pose_backend.py                      frame-to-frame essential-matrix pose estimation
   geometry.py, pose_eval.py            epipolar geometry & pose diagnostics
   eval_metrics.py, kitti_io.py         metrics & KITTI data loaders
   config_io.py                         TOML config + argparse layering
-  ground_plane.py, plane_homography.py, plane_validation.py,
-  interactive_ground_plane_viewer_kitti.py,
-  interactive_plane_homography_viewer_kitti.py   ground/plane subsystem
-sparse_depth_eval_kitti.py             headless evaluator (CSV metrics)
-run_ablation.py                        factorial ablation runner
+evaluate_kitti.py                      headless evaluator                    (entry point 2)
 configs/default.toml                   unified config (paths + baseline params)
 ```
 
@@ -68,7 +83,7 @@ runs on CPU by default, so no GPU is required.
 
 KITTI data is **not** included (it is gitignored). Point the config at your local
 copy. `configs/default.toml` holds the shared paths and one `[sequenceNN]` block
-per sequence — uncomment the one you want:
+per sequence — uncomment the one you want and comment out the others:
 
 ```toml
 [sequence10]
@@ -85,114 +100,111 @@ calib_cam_to_cam   = "data/2011_09_30_calib/2011_09_30/calib_cam_to_cam.txt"
 You need the KITTI odometry **grayscale images**, **ground-truth poses**, and
 (for depth metrics) the raw **Velodyne** scans + calibration.
 
-## Usage
+## Headless evaluation
 
-All commands read `configs/default.toml` for data paths and baseline parameters;
-the CLI flags below just override individual axes.
+`evaluate_kitti.py` runs the pipeline over the configured sequence and writes, to
+`--output-root`:
 
-### Headless evaluation
-
-Writes `summary_metrics.csv`, `per_frame_metrics.csv`, `config.json`, and (unless
-`--minimal-output`) diagnostic plots to `--output-root`.
-
-```powershell
-# 1. Baseline — hybrid SIFT + LK, windowed multiview
-python sparse_depth_eval_kitti.py --config configs/default.toml `
-  --detector sift --descriptor sift --lk-on `
-  --triangulation-method windowed_multiview_dlt `
-  --start 0 --num-frames 50 --output-root outputs/eval_sift_lk_windowed
-
-# 2. Accuracy champion — SIFT, LK off, pure descriptor matching, tight ratio
-python sparse_depth_eval_kitti.py --config configs/default.toml `
-  --detector sift --descriptor sift --no-lk-on `
-  --matcher radius_lowe --ratio 0.70 --search-radius 30 `
-  --triangulation-method best_pair_dlt `
-  --start 0 --num-frames 50 --output-root outputs/eval_sift_lkoff_ratio70
-
-# 3. Shi-Tomasi + LK — tracking-friendly detector
-python sparse_depth_eval_kitti.py --config configs/default.toml `
-  --detector shi --descriptor sift --lk-on `
-  --triangulation-method windowed_multiview_dlt `
-  --start 0 --num-frames 50 --output-root outputs/eval_shi_lk
-
-# 4. XFeat end-to-end — learned detector + descriptor + its own MNN matcher
-python sparse_depth_eval_kitti.py --config configs/default.toml `
-  --detector xfeat --descriptor xfeat --no-lk-on `
-  --matcher xfeat_mnn --xfeat-mnn-min-cossim 0.82 --xfeat-top-k 4096 `
-  --triangulation-method best_pair_dlt `
-  --start 0 --num-frames 50 --output-root outputs/eval_xfeat_native_mnn
-
-# 5. Coverage-oriented — denser buckets
-python sparse_depth_eval_kitti.py --config configs/default.toml `
-  --detector sift --descriptor sift --lk-on `
-  --target-per-bucket 20 --triangulation-method windowed_multiview_dlt `
-  --start 0 --num-frames 50 --output-root outputs/eval_sift_lk_dense
-```
-
-Add `--minimal-output` for fast sweeps (CSV + `config.json` only, no plots).
-
-### Interactive viewer
-
-Same axis flags as the evaluator; page through frames by hand. Launch as a
-module so package imports resolve:
+- `per_frame.csv` — one row per frame: `frame, n_points, img_cov, gt_cov, medRel, meanRel, delta20`
+- `summary.csv` — one row of run-level medians/means (plus pose-estimation error)
+- `depth.mp4` — only with `--save-video`: colored sparse depth over the frame
+- `config.json` — the resolved run configuration
 
 ```powershell
-# 1. Baseline — hybrid SIFT + LK
-python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
-  --detector sift --descriptor sift --lk-on `
-  --triangulation-method windowed_multiview_dlt --start 0
+# Metrics only (250 frames)
+python evaluate_kitti.py --config configs/default.toml `
+  --num-frames 250 --output-root outputs/eval_seq04
 
-# 2. SIFT, LK off, pure matching
-python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
-  --detector sift --descriptor sift --no-lk-on `
-  --matcher radius_lowe --ratio 0.70 --search-radius 30 `
-  --triangulation-method best_pair_dlt --start 0
+# Metrics + depth video
+python evaluate_kitti.py --config configs/default.toml `
+  --num-frames 250 --save-video --output-root outputs/eval_seq04
 
-# 3. Shi-Tomasi + LK
-python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
-  --detector shi --descriptor sift --lk-on `
-  --triangulation-method windowed_multiview_dlt --start 0
-
-# 4. XFeat end-to-end + MNN matcher
-python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
-  --detector xfeat --descriptor xfeat --no-lk-on `
-  --matcher xfeat_mnn --xfeat-mnn-min-cossim 0.82 --xfeat-top-k 4096 `
-  --triangulation-method best_pair_dlt --start 0
-
-# 5. Coverage-oriented — denser buckets
-python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
-  --detector sift --descriptor sift --lk-on `
-  --target-per-bucket 20 --triangulation-method windowed_multiview_dlt --start 0
+# Swap the triangulation backend or use GT poses
+python evaluate_kitti.py --config configs/default.toml `
+  --triangulation-method best_pair_dlt --pose-source gt `
+  --num-frames 250 --output-root outputs/eval_seq04_bestpair_gt
 ```
 
-Use `--end-frame N` to cap the range; omit it to walk the whole sequence.
-`--resize` scales the display window.
+### Metrics reported
 
-### Ablation sweeps
+- **n_points** — accepted sparse depth points that frame.
+- **img_cov** — fraction of image grid cells that hold a depth point (spatial spread).
+- **gt_cov** — fraction of projected LiDAR points that have a sparse estimate nearby.
+- **medRel / meanRel** — median / mean relative depth error vs. matched LiDAR (`|z−z_gt|/z_gt`).
+- **delta20** — fraction of points within 20 % of LiDAR depth (higher is better).
+- **ms/frame** — wall-clock throughput.
+- **pose_median_rot_err_deg / pose_median_t_err_deg** — pose-backend accuracy vs. GT (estimated mode only).
 
-`run_ablation.py` runs a predefined factorial grid over the axes and writes one
-comparison CSV (`ablation_summary.csv`) with per-run resolved parameters and
-median+mean metrics:
+## Interactive viewer
+
+Launch as a module so package imports resolve. Same axis flags as the evaluator;
+you step through frames by hand.
 
 ```powershell
-python run_ablation.py --num-frames 50                 # full grid
-python run_ablation.py --only period core --num-frames 50   # selected groups
+# Baseline
+python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml --start 0
+
+# Shi-Tomasi + LK
+python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
+  --detector shi --descriptor sift --lk-on --start 0
+
+# XFeat end-to-end + MNN matcher
+python -m sparse_depth.interactive_feature_manager_kitti --config configs/default.toml `
+  --detector xfeat --descriptor xfeat --no-lk-on --matcher xfeat_mnn --start 0
 ```
 
-## Metrics
+### View modes (keys `1`–`7`, or `m` to cycle)
 
-The evaluator reports, per run: **image coverage** (fraction of grid buckets
-with depth), **GT coverage** (fraction of projected LiDAR points a sparse
-estimate covers), **matched point counts** (median + mean), **relative and
-absolute depth error** (median + mean, robust to startup zeros vs. tail
-throughput), and **categorized timings** (feature front-end vs. triangulation).
+| Key | Mode | Shows |
+|-----|------|-------|
+| `1` | **status**  | tracks colored by state (confirmed / candidate / reacquired / lost) |
+| `2` | **buckets** | the spatial grid and per-bucket population used for spawning |
+| `3` | **age**     | tracks colored by how many frames they have survived |
+| `4` | **triang**  | triangulation gate outcome per track (good / bad epipolar / low parallax / …) |
+| `5` | **depth**   | per-point triangulated depth, color-coded, with LiDAR comparison in the panel |
+| `6` | **quality** | tracks colored by their quality score (the selection ranking) |
+| `7` | **pose**    | estimated-vs-GT relative-pose diagnostics for the current frame gap |
+
+### Keybindings
+
+| Key | Action |
+|-----|--------|
+| `n` / `d` / `→` | next frame |
+| `b` / `a` / `←` | previous cached frame |
+| `m` | cycle view mode |
+| `1`–`7` | jump to a view mode |
+| `p` | toggle track paths |
+| `v` | toggle velocity arrows |
+| `l` | toggle lost / predicted tracks |
+| `G` | toggle bucket grid overlay |
+| `+` / `-` | increase / decrease displayed track cap |
+| `r` | reset the manager at the current frame |
+| `R` | reset the manager at the original `--start` frame |
+| `s` | save a screenshot to `--output-root` |
+| `h` | print the controls to the console |
+| `q` / `Esc` | quit |
+| mouse left-click | print the nearest active track's details to the console |
+
+### Color meaning
+
+In the **depth** view points are colored by distance (Turbo colormap, warm =
+near, cool = far); the side panel reports matched-LiDAR error for the frame. In
+**status**/**age**/**quality** the color encodes the named attribute rather than
+depth. Use `--end-frame N` to cap the range; `--resize` scales the window.
+
+## Configuration
+
+`configs/default.toml` is organized into sections (`[frontend]`, `[lk]`,
+`[association]`, `[triangulation]`, `[lidar]`, …). Section names are cosmetic —
+each key maps to a CLI flag. Precedence is: **CLI flag > config file > built-in
+default**. You can pass `--config` more than once; later files override earlier
+ones. Old bundled names (`--detector-mode`, `--lk-tracking`, `--lk-sift-period`,
+`--association-matcher`, …) still work as back-compat aliases.
 
 ## Notes
 
-- Depth is triangulated from **ground-truth poses**, so this measures the
-  *feature front-end + triangulation* quality, not pose estimation. A separate
-  pose-eval diagnostic (essential-matrix RANSAC on the tracks) is reported
-  alongside for reference.
-- Old bundled names (`--detector-mode`, `--lk-tracking`, `--lk-sift-period`,
-  `--association-matcher`, …) still work as back-compat aliases for the new
-  orthogonal flags.
+- Absolute scale comes from GT translation magnitude per step; everything else in
+  the pose (rotation, translation direction) is estimated. This isolates the
+  *feature front-end + triangulation* quality from monocular scale ambiguity.
+- Frames at the very start of a run report zero points until a track has enough
+  views for the chosen triangulation method (e.g. 3 for windowed multiview).

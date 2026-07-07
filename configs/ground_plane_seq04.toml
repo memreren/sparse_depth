@@ -1,0 +1,66 @@
+# First ground-plane experiment: GT relative pose + fixed local level road.
+# Run: python -m sparse_depth.interactive_ground_plane_viewer_kitti --config configs/ground_plane_seq04.toml
+
+[sequence04]
+############## SEQUENCE 04 ########################
+# Directory containing rectified grayscale image_00 PNG files.
+img_dir = "C:/Users/DELL/Documents/kittiVO/data/data_odometry_gray/dataset/sequences/04/image_0"
+# KITTI odometry calibration file; P0 is used for the monocular camera intrinsics.
+calib = "C:/Users/DELL/Documents/kittiVO/data/data_odometry_gray/dataset/sequences/04/calib.txt"
+# KITTI odometry pose file; used only for GT geometry/triangulation diagnostics.
+poses = "C:/Users/DELL/Documents/kittiVO/data/data_odometry_poses/dataset/poses/04.txt"
+# Number of digits in image filenames, e.g. 0000000000.png -> 10.
+image_digits = 6
+# Directory containing KITTI Velodyne .bin files. Leave commented to disable LiDAR.
+velodyne_dir = "C:/Users/DELL/Documents/kittiVO/data/2011_09_30_drive_0016_sync/velodyne_points/data"
+# Raw KITTI velo-to-camera calibration file. Needed for raw Velodyne projection.
+calib_velo_to_cam = "C:/Users/DELL/Documents/kittiVO/data/2011_09_30_calib/2011_09_30/calib_velo_to_cam.txt"
+# Raw KITTI cam-to-cam calibration file. Preferred when projecting raw Velodyne.
+calib_cam_to_cam = "C:/Users/DELL/Documents/kittiVO/data/2011_09_30_calib/2011_09_30/calib_cam_to_cam.txt"
+# Number of digits in Velodyne filenames. Leave commented to use image_digits.
+lidar_digits = 10
+output_root = "outputs/ground_plane_seq04"
+
+[run]
+start = 25
+end_frame = 250
+
+[ground_plane]
+# Initial physical prior. j/k in the viewer adjust this by 2 cm.
+camera_height_m = 1.53
+source_gap = 1
+min_depth_m = 2.0
+max_depth_m = 45.0
+
+# Deliberately broad DEBUG support trapezoid, in normalized image coordinates.
+# It reaches into curbs/sidewalks and farther toward the horizon so the
+# residual view shows where the fixed-plane model breaks, not just its best
+# road-core region. Tighten this again before using residuals as a gate.
+roi_top_y_frac = 0.66
+roi_bottom_left_frac = 0.02
+roi_bottom_right_frac = 0.98
+roi_top_left_frac = 0.25
+roi_top_right_frac = 0.75
+
+# Plane-warp residual threshold = median + scale * 1.4826 * MAD.
+residual_mad_scale = 3.5
+
+# A second, texture-aware diagnostic. A 7x7 patch must have enough local
+# texture in both images before ZNCC is evaluated; otherwise it is labeled
+# uninformative instead of quietly passing just because asphalt is flat.
+patch_radius_px = 3
+patch_min_std = 5.0
+patch_zncc_thresh = 0.75
+
+[lidar]
+min_lidar_depth_m = 1.0
+max_lidar_depth_m = 120.0
+max_lidar_vis_points = 12000
+lidar_click_radius_px = 5.0
+
+[viewer]
+resize = 1.1
+side_panel_width = 420
+# Keeps space for the patch diagnostics and the depth-colormap legend. The
+# image is padded black below native height rather than stretched.
+side_panel_height = 900

@@ -1,0 +1,10 @@
+# Overlay config: run any tool with the direct pairwise TTC (radial-expansion)
+# depth estimator instead of the default triangulation backend.
+#
+# Layer it on top of the shared baseline (later --config wins):
+#   python -m sparse_depth.interactive_feature_manager_kitti \
+#       --config configs/default.toml --config configs/ttc_expansion.toml
+#
+# This deliberately does NOT touch default.toml so the triangulation baseline
+# used by the eval/ablation scripts stays reproducible.
+triangulation_method = "ttc_expansion"

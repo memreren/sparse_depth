@@ -1,0 +1,36 @@
+{
+  "normal": [
+    0.01943628547530598,
+    0.9996805002966724,
+    0.016159459567605033
+  ],
+  "height_m": 1.6365284738929884,
+  "pitch_deg": 0.9260840870124215,
+  "roll_deg": 1.113832708452114,
+  "angle_down_deg": 1.4483863512070185,
+  "n_frames": 150,
+  "meta": {
+    "pitch_std_deg": 0.15086458129714633,
+    "roll_std_deg": 0.5460810417994213,
+    "height_std_m": 0.012581061140821803,
+    "img_dir": "C:\\Users\\DELL\\Documents\\kittiVO\\data\\data_odometry_gray\\dataset\\sequences\\04\\image_0",
+    "start": 20,
+    "num_frames": 150,
+    "roi": {
+      "top_y": 0.66,
+      "bottom": [
+        0.02,
+        0.7
+      ],
+      "top": [
+        0.02,
+        0.5
+      ]
+    },
+    "depth_band_m": [
+      2.0,
+      45.0
+    ],
+    "mean_fit_rms_m": 0.02611336078890583
+  }
+}

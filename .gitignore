@@ -22,3 +22,6 @@ __pycache__/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# claude code per-machine settings
+.claude/settings.local.json
