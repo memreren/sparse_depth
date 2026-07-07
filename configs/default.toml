@@ -12,7 +12,7 @@
 
 [paths]
 # Shared output root default. Evaluator/viewer may override via CLI if desired.
-output_root = "outputs/sift_lk_seq10_refined_multiview_dlt"
+output_root = "outputs/eval_seq04"
 # Raw KITTI camera id. image_00 / odometry P0 corresponds to "00".
 camera = "00"
 
